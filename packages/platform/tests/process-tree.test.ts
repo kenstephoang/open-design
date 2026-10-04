@@ -67,6 +67,70 @@ describe("collectProcessTreePids", () => {
   });
 });
 
+describe("collectProcessTreePids across recycled PIDs", () => {
+  const born = (pid: number, ppid: number, startedAtMs: number): ProcessSnapshot => ({
+    command: `pid-${pid}`, pid, ppid, startedAtMs,
+  });
+
+  it("does not adopt an orphan whose recorded parent PID now belongs to a younger descendant", () => {
+    // Windows keeps ParentProcessId after the parent exits. Orphan 900 (and its
+    // own child 901) still name PID 700, which a descendant of the root reused.
+    const processes = [
+      born(100, 1, 50),
+      born(700, 100, 200),
+      born(900, 700, 100),
+      born(901, 900, 110),
+    ];
+    expect(collectProcessTreePids(processes, [100])).toEqual([700, 100]);
+  });
+
+  it("does not adopt an orphan that names the recycled root PID as its parent", () => {
+    expect(collectProcessTreePids([born(100, 1, 200), born(900, 100, 100)], [100])).toEqual([100]);
+  });
+
+  it("keeps children created with or after their parent", () => {
+    const processes = [born(100, 1, 50), born(200, 100, 50), born(300, 200, 51)];
+    expect(collectProcessTreePids(processes, [100])).toEqual([300, 200, 100]);
+  });
+
+  it("keeps a descendant's own generation apart from an older one in merged snapshots", () => {
+    // PID 700 was a dead launcher's when 900 was created, and is an agent
+    // descendant by the second capture. Only the newer 700 is in the tree.
+    const first = [born(100, 1, 50), born(700, 1, 60), born(900, 700, 70)];
+    const second = [born(100, 1, 50), born(700, 100, 200), born(900, 700, 70), born(960, 700, 210)];
+    expect(collectProcessTreePids([...first, ...second], [100])).toEqual([960, 700, 100]);
+  });
+
+  it("drops a descendant PID that an unrelated process reused between merged snapshots", () => {
+    // 700 was a descendant in the first capture, then exited; by the second
+    // capture PID 700 is an unrelated process with its own child 950. The
+    // surviving grandchild 900 stays owned, the reused PID and 950 do not.
+    const first = [born(100, 1, 50), born(700, 100, 60), born(900, 700, 70)];
+    const second = [born(100, 1, 50), born(700, 4_000, 300), born(900, 700, 70), born(950, 700, 310)];
+    expect(collectProcessTreePids([...first, ...second], [100])).toEqual([900, 100]);
+  });
+
+  it("follows every observed generation of a root PID, which carries no identity of its own", () => {
+    const processes = [born(100, 1, 50), born(200, 100, 60), born(100, 1, 300), born(210, 100, 310)];
+    expect(collectProcessTreePids(processes, [100])).toEqual([210, 200, 100]);
+  });
+
+  it("trusts the ppid edge when either side has no creation time", () => {
+    // POSIX enumeration: a mid-tree exit reparents 300 between merged captures.
+    const first = [snapshot(100, 1), snapshot(200, 100), snapshot(300, 200)];
+    const second = [snapshot(100, 1), snapshot(300, 1)];
+    expect(collectProcessTreePids([...first, ...second], [100])).toEqual([300, 200, 100]);
+
+    expect(collectProcessTreePids([born(100, 1, 200), snapshot(200, 100)], [100])).toEqual([200, 100]);
+    expect(collectProcessTreePids([snapshot(100, 1), born(200, 100, 10)], [100])).toEqual([200, 100]);
+    expect(collectProcessTreePids([born(200, 100, 10)], [100])).toEqual([200, 100]);
+    expect(collectProcessTreePids([
+      { command: "pid-100", pid: 100, ppid: 1, startedAtMs: 0 },
+      born(200, 100, 10),
+    ], [100])).toEqual([200, 100]);
+  });
+});
+
 describe("selectStampedProcessesAtInvocation", () => {
   const command = "node fixture.js --test-namespace=alpha";
 

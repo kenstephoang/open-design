@@ -636,10 +636,46 @@ async function captureWindowsStampedProcessTrees<
 }
 
 /**
+ * One process generation: a PID plus the creation time that tells it apart
+ * from an earlier or later process holding the same PID. `startedAtMs` is
+ * undefined when the enumeration backend reported no usable creation time.
+ */
+type ProcessGeneration = { pid: number; ppids: Set<number>; startedAtMs: number | undefined };
+
+/**
+ * A process is never older than its parent. Windows keeps `ParentProcessId`
+ * after the parent exits and recycles PIDs quickly, so a long-lived orphan can
+ * name a PID that now belongs to a younger, unrelated process. When several
+ * generations of the parent PID are known (snapshots merged across a reuse),
+ * the child belongs to the newest one that already existed at its creation.
+ * Both times come from the same OS clock, so no tolerance applies. Without a
+ * creation time on both sides (POSIX enumeration) the `ppid` edge is the only
+ * evidence available and is trusted.
+ */
+function generationParentsChild(
+  parent: ProcessGeneration,
+  child: ProcessGeneration,
+  parentGenerations: readonly ProcessGeneration[],
+): boolean {
+  const parentStartedAtMs = parent.startedAtMs;
+  const childStartedAtMs = child.startedAtMs;
+  if (parentStartedAtMs === undefined || childStartedAtMs === undefined) return true;
+  if (childStartedAtMs < parentStartedAtMs) return false;
+  return !parentGenerations.some(({ startedAtMs }) =>
+    startedAtMs !== undefined && startedAtMs > parentStartedAtMs && startedAtMs <= childStartedAtMs);
+}
+
+/**
  * Collect the transitive set of descendant PIDs (including the roots) from a
  * process snapshot list, returned sorted descending so children precede parents.
  *
- * @param processes - The full process snapshot list to walk.
+ * The walk follows process generations rather than bare PIDs: see
+ * `generationParentsChild` for when a `ppid` edge counts. A descendant whose
+ * PID shows up with a newer creation time outside the tree has exited and had
+ * its PID recycled, so that PID is left out. Root PIDs carry no identity; every
+ * observed generation of a root is followed and the root PID is always returned.
+ *
+ * @param processes - The process snapshot list to walk; may merge several captures.
  * @param rootPids - The root PIDs whose subtrees to collect (non-numbers ignored).
  * @returns The unique PIDs of the roots and all their descendants, descending.
  */
@@ -647,23 +683,43 @@ export function collectProcessTreePids(
   processes: ProcessSnapshot[],
   rootPids: Array<number | null | undefined>,
 ): number[] {
-  const queue = [...new Set(rootPids.filter((pid): pid is number => typeof pid === "number"))];
-  const visited = new Set<number>();
-  const childrenByParent = new Map<number, number[]>();
+  const pids = new Set(rootPids.filter((pid): pid is number => typeof pid === "number"));
+  const generationsByPid = new Map<number, ProcessGeneration[]>();
+  const childrenByParent = new Map<number, ProcessGeneration[]>();
   for (const processInfo of processes) {
+    const startedAtMs = Number.isSafeInteger(processInfo.startedAtMs) && processInfo.startedAtMs! > 0
+      ? processInfo.startedAtMs
+      : undefined;
+    const generations = generationsByPid.get(processInfo.pid) ?? [];
+    let generation = generations.find((entry) => entry.startedAtMs === startedAtMs);
+    if (generation == null) {
+      generation = { pid: processInfo.pid, ppids: new Set(), startedAtMs };
+      generations.push(generation);
+      generationsByPid.set(processInfo.pid, generations);
+    }
+    if (generation.ppids.has(processInfo.ppid)) continue;
+    generation.ppids.add(processInfo.ppid);
     const children = childrenByParent.get(processInfo.ppid) ?? [];
-    children.push(processInfo.pid);
+    children.push(generation);
     childrenByParent.set(processInfo.ppid, children);
   }
-  while (queue.length > 0) {
-    const pid = queue.shift();
-    if (pid == null || visited.has(pid)) continue;
-    visited.add(pid);
-    for (const childPid of childrenByParent.get(pid) ?? []) {
-      if (!visited.has(childPid)) queue.push(childPid);
+  // A root missing from the snapshot still owns whatever names it as parent.
+  const queue = [...pids].flatMap((pid): ProcessGeneration[] =>
+    generationsByPid.get(pid) ?? [{ pid, ppids: new Set(), startedAtMs: undefined }]);
+  const visited = new Set<ProcessGeneration>();
+  for (let index = 0; index < queue.length; index++) {
+    const parent = queue[index]!;
+    if (visited.has(parent)) continue;
+    visited.add(parent);
+    const parentGenerations = generationsByPid.get(parent.pid) ?? [];
+    const recycled = parent.startedAtMs !== undefined && parentGenerations.some(({ startedAtMs }) =>
+      startedAtMs !== undefined && startedAtMs > parent.startedAtMs!);
+    if (!recycled) pids.add(parent.pid);
+    for (const child of childrenByParent.get(parent.pid) ?? []) {
+      if (!visited.has(child) && generationParentsChild(parent, child, parentGenerations)) queue.push(child);
     }
   }
-  return [...visited].sort((left, right) => right - left);
+  return [...pids].sort((left, right) => right - left);
 }
 
 /**
