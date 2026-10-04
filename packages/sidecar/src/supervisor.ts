@@ -168,6 +168,9 @@ function observeTarget(): void {
     process.exitCode = 1;
   });
   child.once("exit", (code, signal) => {
+    // A target that is terminated from outside or crashes natively writes
+    // nothing itself; this status is then the only record of how it ended.
+    console.error(`[sidecar-supervisor] ${stamp.app} target pid ${child.pid} exited code=${code} signal=${signal} at ${new Date().toISOString()}`);
     const handoff = pendingHandoff;
     pendingHandoff = null;
     if (handoff != null && forwardedSignal == null && !ownerExpired) {

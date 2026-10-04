@@ -771,6 +771,14 @@ function installFatalTelemetryHandlers({
   ): void => {
     if (fatalShuttingDown) return;
     fatalShuttingDown = true;
+    // The process exits below; without this line the daemon log shows nothing
+    // and the cause is unrecoverable when telemetry is off or the flush times out.
+    try {
+      console.error(
+        `[daemon] fatal ${eventName} at ${new Date().toISOString()}; exiting 1:`,
+        properties.error_stack ?? `${properties.error_name}: ${properties.error_message}`,
+      );
+    } catch { /* a closed stderr must never delay fatal shutdown */ }
     try {
       const incidentId = onHostFault?.(eventName, properties);
       if (incidentId) properties = { ...properties, diagnostic_incident_id: incidentId };

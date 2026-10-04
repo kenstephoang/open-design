@@ -727,6 +727,71 @@ function readDurableRunEvents(eventsLogPath) {
   }
 }
 
+const DURABLE_EVENT_TAIL_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * The last `maxEvents` records of a run's journal, read from the end of the
+ * file. A hydrated run must hold what a live run's ring holds and no more:
+ * `stream()` replays everything older from the journal, so parsing the whole
+ * file only pins a finished run's history in the heap. A record that does not
+ * parse (a write cut short by a crash) is skipped instead of discarding the
+ * tail around it.
+ */
+function readDurableRunEventsTail(eventsLogPath, maxEvents) {
+  let fd = null;
+  try {
+    fd = fs.openSync(eventsLogPath, 'r');
+    let start = fs.fstatSync(fd).size;
+    const chunks = [];
+    let newlines = 0;
+    // One newline beyond `maxEvents` marks where the oldest kept record starts.
+    while (start > 0 && newlines <= maxEvents) {
+      const length = Math.min(DURABLE_EVENT_TAIL_CHUNK_BYTES, start);
+      start -= length;
+      const chunk = Buffer.allocUnsafe(length);
+      let filled = 0;
+      while (filled < length) {
+        const read = fs.readSync(fd, chunk, filled, length - filled, start + filled);
+        if (read === 0) throw new Error('Run event journal shrank during read');
+        filled += read;
+      }
+      for (let index = 0; index < length; index++) {
+        if (chunk[index] === 0x0a) newlines++;
+      }
+      chunks.unshift(chunk);
+    }
+    const lines = Buffer.concat(chunks).toString('utf8').split('\n');
+    // A read that stopped inside the file begins mid-record; a newline byte
+    // never occurs inside a UTF-8 sequence, so only that first piece is unsafe.
+    if (start > 0) lines.shift();
+    const records = [];
+    for (const line of lines) {
+      if (!line) continue;
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (
+        record
+        && typeof record === 'object'
+        && Number.isFinite(record.id)
+        && typeof record.event === 'string'
+      ) {
+        records.push(record);
+      }
+    }
+    return records.length > maxEvents ? records.slice(-maxEvents) : records;
+  } catch {
+    return [];
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch { /* nothing left to release */ }
+    }
+  }
+}
+
 export function createChatRunService({
   createSseResponse,
   createSseErrorPayload,
@@ -848,7 +913,7 @@ export function createChatRunService({
     const state = readDurableRunState(statePath);
     if (!state || state.id !== id) return null;
     const eventsLogPath = path.join(runsLogDir, id, 'events.jsonl');
-    const events = readDurableRunEvents(eventsLogPath);
+    const events = readDurableRunEventsTail(eventsLogPath, maxEvents);
     const interruptedAfterRestart = interruptDurableRunAfterDaemonRestart(
       state,
       Date.now(),
@@ -896,6 +961,7 @@ export function createChatRunService({
         },
         timestamp,
       });
+      if (events.length > maxEvents) events.splice(0, events.length - maxEvents);
     }
     const run = {
       ...state,
@@ -931,6 +997,9 @@ export function createChatRunService({
       hydratedWithoutAppliedSnapshot.add(run);
     }
     runs.set(id, run);
+    // Same terminal TTL a run that ended in this process gets; a later
+    // `get`/`list` rehydrates it from the journal.
+    scheduleCleanup(run);
     return run;
   };
 
