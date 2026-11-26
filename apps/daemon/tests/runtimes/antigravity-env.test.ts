@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -12,11 +12,11 @@ import {
 } from '../../src/app-config.js';
 import { isLocalSameOrigin } from '../../src/origin-validation.js';
 import { spawnEnvForAgent } from '../../src/runtimes/env.js';
-import { agentBinEnvKey } from '../../src/runtimes/executables.js';
 import {
   antigravityAgentDef,
   resolveAntigravitySettingsPath,
 } from '../../src/runtimes/defs/antigravity.js';
+import { resolveAntigravityRunSettingsPath } from '../../src/server.js';
 import { withPlatform } from './helpers/test-helpers.js';
 
 describe('antigravity agentCliEnv and spawn env', () => {
@@ -105,10 +105,6 @@ describe('antigravity agentCliEnv and spawn env', () => {
     }
   });
 
-  it('registers AGY_BIN in AGENT_BIN_ENV_KEYS for antigravity', () => {
-    expect(agentBinEnvKey('antigravity')).toBe('AGY_BIN');
-  });
-
   it('lets configured antigravity env override differently-cased daemon keys on Windows', () => {
     const customHome = 'D:\\work\\.agent-runtime\\agy-accounts\\acct1';
     const env = withPlatform('win32', () =>
@@ -168,11 +164,53 @@ describe('antigravity agentCliEnv and spawn env', () => {
     expect(env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe('1');
   });
 
-  it('resolves antigravity settings.json under run env USERPROFILE and writes concrete model selection there', () => {
+  it('falls back to homedir when USERPROFILE or HOME is relative, and handles case-insensitive UserProfile', () => {
+    const expectedFallback = path.join(
+      homedir(),
+      '.gemini',
+      'antigravity-cli',
+      'settings.json',
+    );
+
+    const relativeWin = withPlatform('win32', () =>
+      resolveAntigravitySettingsPath({ USERPROFILE: 'relative\\agy-home' }),
+    );
+    expect(relativeWin).toBe(expectedFallback);
+
+    const mixedCaseWin = withPlatform('win32', () =>
+      resolveAntigravitySettingsPath({
+        UserProfile: 'D:\\work\\.agent-runtime\\agy-accounts\\acct2',
+      }),
+    );
+    expect(mixedCaseWin).toBe(
+      path.join(
+        'D:\\work\\.agent-runtime\\agy-accounts\\acct2',
+        '.gemini',
+        'antigravity-cli',
+        'settings.json',
+      ),
+    );
+
+    const linuxHome = withPlatform('linux', () =>
+      resolveAntigravitySettingsPath({
+        USERPROFILE: 'C:\\Users\\ignored-on-linux',
+        HOME: '/home/agy-acct',
+      }),
+    );
+    expect(linuxHome).toBe(
+      path.join('/home/agy-acct', '.gemini', 'antigravity-cli', 'settings.json'),
+    );
+
+    const relativeLinux = withPlatform('linux', () =>
+      resolveAntigravitySettingsPath({ HOME: 'relative/agy-home' }),
+    );
+    expect(relativeLinux).toBe(expectedFallback);
+  });
+
+  it('resolves antigravity settings.json through server.ts run helper from configured run env and writes model selection there', () => {
     const customHome = path.join(dataDir, 'agy-home');
-    const runEnv = withPlatform('win32', () =>
-      spawnEnvForAgent(
-        'antigravity',
+    const settingsPath = withPlatform('win32', () =>
+      resolveAntigravityRunSettingsPath(
         {
           Path: 'C:\\Windows\\System32',
           UserProfile: 'C:\\Users\\daemon',
@@ -180,11 +218,9 @@ describe('antigravity agentCliEnv and spawn env', () => {
         {
           USERPROFILE: customHome,
         },
-        {},
       ),
     );
 
-    const settingsPath = resolveAntigravitySettingsPath(runEnv);
     expect(settingsPath).toBe(
       path.join(customHome, '.gemini', 'antigravity-cli', 'settings.json'),
     );
