@@ -262,6 +262,7 @@ import { loadMmdRouteLaunchEnv } from './runtimes/mmd-routes.js';
 import { withAcpHandshakeFailureGuidance } from './runtimes/acp-handshake-failure.js';
 import { withAcpServiceFailureCode } from './runtimes/acp-service-failure.js';
 import { preflightCodexDefaultModel } from './runtimes/codex-model-preflight.js';
+import { resolveAntigravitySettingsPath } from './runtimes/defs/antigravity.js';
 import { preparePromptFileForAgent } from './runtimes/prompt-file.js';
 import { TerminalControlSequenceStripper } from './runtimes/terminal-control.js';
 import { stampToolTiming } from './runtimes/tool-timing.js';
@@ -2015,6 +2016,21 @@ export function createDaemonDataDirConfiguredAgentEnv(
     ...configuredAgentEnv,
     OD_DATA_DIR: RUNTIME_DATA_DIR,
   };
+}
+
+export function resolveAntigravityRunSettingsPath(
+  baseEnv: NodeJS.ProcessEnv,
+  configuredAgentEnv: Record<string, string> = {},
+  resolvedBin?: string | null,
+): string {
+  const antigravityEnv = spawnEnvForAgent(
+    'antigravity',
+    baseEnv,
+    configuredAgentEnv,
+    undefined,
+    { resolvedBin },
+  );
+  return resolveAntigravitySettingsPath(antigravityEnv);
 }
 
 export function normalizeProjectDisplayStatus(status) {
@@ -14537,6 +14553,7 @@ export async function startServer({
     // AFTER agy's --log-file confirms the model was propagated. See
     // `antigravity.ts` for the chain implementation.
     let antigravityModelLockRelease: (() => void) | null = null;
+    let antigravitySettingsPath: string | undefined;
     const antigravityConcreteModel =
       def.id === 'antigravity'
       && typeof agentOptions.model === 'string'
@@ -14544,11 +14561,18 @@ export async function startServer({
       && agentOptions.model !== 'default'
         ? agentOptions.model
         : null;
-    if (antigravityConcreteModel) {
-      const { acquireAntigravityModelLock } = await import(
-        './runtimes/defs/antigravity.js'
+    if (def.id === 'antigravity') {
+      antigravitySettingsPath = resolveAntigravityRunSettingsPath(
+        process.env,
+        configuredAgentEnv,
+        agentLaunch.selectedPath,
       );
-      antigravityModelLockRelease = await acquireAntigravityModelLock();
+      if (antigravityConcreteModel) {
+        const { acquireAntigravityModelLock } = await import(
+          './runtimes/defs/antigravity.js'
+        );
+        antigravityModelLockRelease = await acquireAntigravityModelLock();
+      }
     }
 
     let args;
@@ -14568,6 +14592,7 @@ export async function startServer({
           cwd: effectiveCwd,
           hasPriorAssistantTurn,
           agentLogFilePath,
+          ...(antigravitySettingsPath ? { antigravitySettingsPath } : {}),
           promptFilePath: promptFile?.path,
           resumeSessionId: agentResumePromptPolicy.resumeSessionId,
           newSessionId: agentResumeCtx.newSessionId,

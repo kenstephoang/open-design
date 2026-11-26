@@ -2580,6 +2580,23 @@ async function testAgentConnectionInternal(
       if (input.agentId === 'opencode') await prepareOpenCodeConnectionTestCwd(tempDir);
     }
     let args: string[];
+    const antigravitySettingsPath =
+      input.agentId === 'antigravity'
+        ? (
+            await import('./runtimes/defs/antigravity.js')
+          ).resolveAntigravitySettingsPath(
+            spawnEnvForAgent(
+              input.agentId,
+              {
+                ...process.env,
+                ...(def.env || {}),
+              },
+              configuredAgentEnv,
+              undefined,
+              { resolvedBin: executableResolution.selectedPath },
+            ),
+          )
+        : undefined;
     try {
       promptFile = await preparePromptFileForAgent(def, SMOKE_PROMPT, 'connection-test');
       args = def.buildArgs(
@@ -2603,6 +2620,9 @@ async function testAgentConnectionInternal(
           ...(promptFile ? { promptFilePath: promptFile.path } : {}),
           ...(antigravityLogFilePath
             ? { agentLogFilePath: antigravityLogFilePath }
+            : {}),
+          ...(antigravitySettingsPath
+            ? { antigravitySettingsPath }
             : {}),
         },
       );

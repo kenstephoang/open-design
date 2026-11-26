@@ -6,7 +6,7 @@ import {
 } from 'node:fs';
 import { readFile as fsReadFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix, win32 } from 'node:path';
 
 import { DEFAULT_MODEL_OPTION } from './shared.js';
 import { agentCapabilities } from '../capabilities.js';
@@ -69,6 +69,32 @@ const ANTIGRAVITY_SETTINGS_PATH = join(
   'antigravity-cli',
   'settings.json',
 );
+
+export function resolveAntigravitySettingsPath(
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
+): string {
+  const isWin32 = process.platform === 'win32';
+  const primaryKey = isWin32 ? 'USERPROFILE' : 'HOME';
+  let candidate: string | undefined;
+  if (env) {
+    const exact = env[primaryKey];
+    if (typeof exact === 'string' && exact.trim()) {
+      candidate = exact.trim();
+    } else if (isWin32) {
+      const matchKey = Object.keys(env).find(
+        (key) => key.toUpperCase() === primaryKey,
+      );
+      const value = matchKey ? env[matchKey] : undefined;
+      if (typeof value === 'string' && value.trim()) {
+        candidate = value.trim();
+      }
+    }
+  }
+  const pathApi = isWin32 ? win32 : posix;
+  const baseHome =
+    candidate && pathApi.isAbsolute(candidate) ? candidate : homedir();
+  return join(baseHome, '.gemini', 'antigravity-cli', 'settings.json');
+}
 
 export function writeAntigravityModelSelection(
   label: string,
