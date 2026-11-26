@@ -70,6 +70,31 @@ const ANTIGRAVITY_SETTINGS_PATH = join(
   'settings.json',
 );
 
+export function resolveAntigravitySettingsPath(
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
+): string {
+  let userProfile: string | undefined;
+  if (env) {
+    if (typeof env.USERPROFILE === 'string' && env.USERPROFILE.trim()) {
+      userProfile = env.USERPROFILE.trim();
+    } else {
+      const matchKey = Object.keys(env).find(
+        (key) => key.toUpperCase() === 'USERPROFILE',
+      );
+      const value = matchKey ? env[matchKey] : undefined;
+      if (typeof value === 'string' && value.trim()) {
+        userProfile = value.trim();
+      }
+    }
+  }
+  return join(
+    userProfile || homedir(),
+    '.gemini',
+    'antigravity-cli',
+    'settings.json',
+  );
+}
+
 export function writeAntigravityModelSelection(
   label: string,
   settingsPath: string = ANTIGRAVITY_SETTINGS_PATH,

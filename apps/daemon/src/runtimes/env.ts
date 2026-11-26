@@ -28,6 +28,13 @@ const RUNTIME_MODULE_PROJECT_ROOT = resolveProjectRootFromNestedModule(
   path.dirname(fileURLToPath(import.meta.url)),
 );
 
+const ANTIGRAVITY_CASE_INSENSITIVE_OVERRIDE_KEYS = [
+  'USERPROFILE',
+  'HOME',
+  'AGY_CLI_FORCE_FILE_TOKEN_STORAGE',
+  'AGY_CLI_DISABLE_AUTO_UPDATE',
+] as const;
+
 // Build the env passed to spawn() for a given agent adapter.
 //
 // Auth/config precedence for Local CLI launches:
@@ -165,6 +172,15 @@ export function spawnEnvForAgent(
     if (!env.VELA_OPENCODE_BIN?.trim()) {
       const opencodeBin = resolveAmrOpenCodeExecutable(env);
       if (opencodeBin) env.VELA_OPENCODE_BIN = opencodeBin;
+    }
+    return finalizeRuntimeEnv(env, sandboxRuntime);
+  }
+  if (agentId === 'antigravity') {
+    for (const key of ANTIGRAVITY_CASE_INSENSITIVE_OVERRIDE_KEYS) {
+      const value = envValue(expandedConfiguredEnv, key);
+      if (!value) continue;
+      stripKeysCaseInsensitive(env, [key]);
+      env[key] = value;
     }
     return finalizeRuntimeEnv(env, sandboxRuntime);
   }

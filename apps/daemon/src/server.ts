@@ -14537,6 +14537,7 @@ export async function startServer({
     // AFTER agy's --log-file confirms the model was propagated. See
     // `antigravity.ts` for the chain implementation.
     let antigravityModelLockRelease: (() => void) | null = null;
+    let antigravitySettingsPath: string | undefined;
     const antigravityConcreteModel =
       def.id === 'antigravity'
       && typeof agentOptions.model === 'string'
@@ -14544,11 +14545,20 @@ export async function startServer({
       && agentOptions.model !== 'default'
         ? agentOptions.model
         : null;
-    if (antigravityConcreteModel) {
-      const { acquireAntigravityModelLock } = await import(
-        './runtimes/defs/antigravity.js'
+    if (def.id === 'antigravity') {
+      const { acquireAntigravityModelLock, resolveAntigravitySettingsPath } =
+        await import('./runtimes/defs/antigravity.js');
+      const antigravityEnv = spawnEnvForAgent(
+        'antigravity',
+        process.env,
+        configuredAgentEnv,
+        undefined,
+        { resolvedBin: agentLaunch.selectedPath },
       );
-      antigravityModelLockRelease = await acquireAntigravityModelLock();
+      antigravitySettingsPath = resolveAntigravitySettingsPath(antigravityEnv);
+      if (antigravityConcreteModel) {
+        antigravityModelLockRelease = await acquireAntigravityModelLock();
+      }
     }
 
     let args;
@@ -14568,6 +14578,7 @@ export async function startServer({
           cwd: effectiveCwd,
           hasPriorAssistantTurn,
           agentLogFilePath,
+          ...(antigravitySettingsPath ? { antigravitySettingsPath } : {}),
           promptFilePath: promptFile?.path,
           resumeSessionId: agentResumePromptPolicy.resumeSessionId,
           newSessionId: agentResumeCtx.newSessionId,
