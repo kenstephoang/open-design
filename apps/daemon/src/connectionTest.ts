@@ -2580,23 +2580,25 @@ async function testAgentConnectionInternal(
       if (input.agentId === 'opencode') await prepareOpenCodeConnectionTestCwd(tempDir);
     }
     let args: string[];
-    const antigravitySettingsPath =
-      input.agentId === 'antigravity'
-        ? (
-            await import('./runtimes/defs/antigravity.js')
-          ).resolveAntigravitySettingsPath(
-            spawnEnvForAgent(
-              input.agentId,
-              {
-                ...process.env,
-                ...(def.env || {}),
-              },
-              configuredAgentEnv,
-              undefined,
-              { resolvedBin: executableResolution.selectedPath },
-            ),
-          )
-        : undefined;
+    let antigravitySettingsPath: string | undefined;
+    let antigravityAgent: string | undefined;
+    if (input.agentId === 'antigravity') {
+      const antigravityDefMod = await import('./runtimes/defs/antigravity.js');
+      const antigravityEnv = spawnEnvForAgent(
+        input.agentId,
+        {
+          ...process.env,
+          ...(def.env || {}),
+        },
+        configuredAgentEnv,
+        undefined,
+        { resolvedBin: executableResolution.selectedPath },
+      );
+      antigravitySettingsPath =
+        antigravityDefMod.resolveAntigravitySettingsPath(antigravityEnv);
+      antigravityAgent =
+        antigravityDefMod.resolveAntigravityAgent(antigravityEnv);
+    }
     try {
       promptFile = await preparePromptFileForAgent(def, SMOKE_PROMPT, 'connection-test');
       args = def.buildArgs(
@@ -2623,6 +2625,9 @@ async function testAgentConnectionInternal(
             : {}),
           ...(antigravitySettingsPath
             ? { antigravitySettingsPath }
+            : {}),
+          ...(antigravityAgent
+            ? { antigravityAgent }
             : {}),
         },
       );

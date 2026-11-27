@@ -2414,6 +2414,15 @@ test('antigravity stream maps agy agent_response text, tool steps and the result
     },
     { type: 'text_delta', delta: 'Git rebase...' },
     {
+      type: 'request_usage',
+      requestId: 'c3b66b04-872b-4fbe-a3a4-058a026ef20a:3',
+      usage: {
+        input_tokens: 10302,
+        output_tokens: 582,
+        cache_read_input_tokens: 8113,
+      },
+    },
+    {
       type: 'usage',
       usage: {
         input_tokens: 10418,
