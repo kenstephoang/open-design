@@ -34,6 +34,7 @@ type ParserState = {
   // `<conversation_id>:<step_index>`, and whether any agent_response text
   // streamed (the terminal result repeats the full response).
   antigravityToolUses: Set<string>;
+  antigravityUsageSteps: Set<string>;
   antigravityTextEmitted: boolean;
 };
 
@@ -452,6 +453,35 @@ function handleAntigravityEvent(obj: unknown, onEvent: StreamEventHandler, state
       if (typeof step.text_delta === 'string' && step.text_delta.length > 0) {
         state.antigravityTextEmitted = true;
         onEvent({ type: 'text_delta', delta: step.text_delta });
+      }
+      if (step.state === 'DONE' && isRecord(step.usage)) {
+        const requestId = `${String(step.conversation_id ?? obj.conversation_id ?? '')}:${String(step.step_index ?? state.antigravityUsageSteps.size)}`;
+        if (!state.antigravityUsageSteps.has(requestId)) {
+          const perRequest: Record<string, number> = {};
+          if (typeof step.usage.input_tokens === 'number' && Number.isFinite(step.usage.input_tokens)) {
+            perRequest.input_tokens = step.usage.input_tokens;
+          }
+          if (typeof step.usage.output_tokens === 'number' && Number.isFinite(step.usage.output_tokens)) {
+            perRequest.output_tokens = step.usage.output_tokens;
+          }
+          if (typeof step.usage.cache_read_tokens === 'number' && Number.isFinite(step.usage.cache_read_tokens)) {
+            perRequest.cache_read_input_tokens = step.usage.cache_read_tokens;
+          }
+          if (
+            typeof step.usage.cache_creation_input_tokens === 'number' &&
+            Number.isFinite(step.usage.cache_creation_input_tokens)
+          ) {
+            perRequest.cache_creation_input_tokens = step.usage.cache_creation_input_tokens;
+          }
+          if (Object.keys(perRequest).length > 0) {
+            state.antigravityUsageSteps.add(requestId);
+            onEvent({
+              type: 'request_usage',
+              requestId,
+              usage: perRequest,
+            });
+          }
+        }
       }
       return true;
     }
@@ -1458,6 +1488,7 @@ function createParserState(): ParserState {
     artifactOpenCandidate: '',
     pendingArtifactText: '',
     antigravityToolUses: new Set<string>(),
+    antigravityUsageSteps: new Set<string>(),
     antigravityTextEmitted: false,
   };
 }

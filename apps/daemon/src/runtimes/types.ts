@@ -52,6 +52,10 @@ export type RuntimeContext = {
   // ~/.gemini/antigravity-cli/settings.json). Tests pass a temp path
   // so unit assertions against buildArgs do not touch the real home dir.
   antigravitySettingsPath?: string;
+  // Validated custom agent name for Antigravity (`agy --agent <name>`),
+  // resolved from `AGY_AGENT` only when `<runHome>/.gemini/config/agents/<name>.md`
+  // exists. Ignored when `--agent` is not reported in capabilityFlags.
+  antigravityAgent?: string;
   // Daemon-owned path to a temp file containing the composed prompt.
   // Adapters with `promptViaFile: true` read this instead of receiving
   // the prompt via argv or stdin. The daemon creates the file before

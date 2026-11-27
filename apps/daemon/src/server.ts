@@ -262,7 +262,10 @@ import { loadMmdRouteLaunchEnv } from './runtimes/mmd-routes.js';
 import { withAcpHandshakeFailureGuidance } from './runtimes/acp-handshake-failure.js';
 import { withAcpServiceFailureCode } from './runtimes/acp-service-failure.js';
 import { preflightCodexDefaultModel } from './runtimes/codex-model-preflight.js';
-import { resolveAntigravitySettingsPath } from './runtimes/defs/antigravity.js';
+import {
+  resolveAntigravityAgent,
+  resolveAntigravitySettingsPath,
+} from './runtimes/defs/antigravity.js';
 import { preparePromptFileForAgent } from './runtimes/prompt-file.js';
 import { TerminalControlSequenceStripper } from './runtimes/terminal-control.js';
 import { stampToolTiming } from './runtimes/tool-timing.js';
@@ -2018,11 +2021,11 @@ export function createDaemonDataDirConfiguredAgentEnv(
   };
 }
 
-export function resolveAntigravityRunSettingsPath(
+export function resolveAntigravityRunContext(
   baseEnv: NodeJS.ProcessEnv,
   configuredAgentEnv: Record<string, string> = {},
   resolvedBin?: string | null,
-): string {
+): { antigravitySettingsPath: string; antigravityAgent?: string } {
   const antigravityEnv = spawnEnvForAgent(
     'antigravity',
     baseEnv,
@@ -2030,7 +2033,20 @@ export function resolveAntigravityRunSettingsPath(
     undefined,
     { resolvedBin },
   );
-  return resolveAntigravitySettingsPath(antigravityEnv);
+  const antigravityAgent = resolveAntigravityAgent(antigravityEnv);
+  return {
+    antigravitySettingsPath: resolveAntigravitySettingsPath(antigravityEnv),
+    ...(antigravityAgent ? { antigravityAgent } : {}),
+  };
+}
+
+export function resolveAntigravityRunSettingsPath(
+  baseEnv: NodeJS.ProcessEnv,
+  configuredAgentEnv: Record<string, string> = {},
+  resolvedBin?: string | null,
+): string {
+  return resolveAntigravityRunContext(baseEnv, configuredAgentEnv, resolvedBin)
+    .antigravitySettingsPath;
 }
 
 export function normalizeProjectDisplayStatus(status) {
@@ -14554,6 +14570,7 @@ export async function startServer({
     // `antigravity.ts` for the chain implementation.
     let antigravityModelLockRelease: (() => void) | null = null;
     let antigravitySettingsPath: string | undefined;
+    let antigravityAgent: string | undefined;
     const antigravityConcreteModel =
       def.id === 'antigravity'
       && typeof agentOptions.model === 'string'
@@ -14562,11 +14579,13 @@ export async function startServer({
         ? agentOptions.model
         : null;
     if (def.id === 'antigravity') {
-      antigravitySettingsPath = resolveAntigravityRunSettingsPath(
+      const resolvedAntigravity = resolveAntigravityRunContext(
         process.env,
         configuredAgentEnv,
         agentLaunch.selectedPath,
       );
+      antigravitySettingsPath = resolvedAntigravity.antigravitySettingsPath;
+      antigravityAgent = resolvedAntigravity.antigravityAgent;
       if (antigravityConcreteModel) {
         const { acquireAntigravityModelLock } = await import(
           './runtimes/defs/antigravity.js'
@@ -14593,6 +14612,7 @@ export async function startServer({
           hasPriorAssistantTurn,
           agentLogFilePath,
           ...(antigravitySettingsPath ? { antigravitySettingsPath } : {}),
+          ...(antigravityAgent ? { antigravityAgent } : {}),
           promptFilePath: promptFile?.path,
           resumeSessionId: agentResumePromptPolicy.resumeSessionId,
           newSessionId: agentResumeCtx.newSessionId,

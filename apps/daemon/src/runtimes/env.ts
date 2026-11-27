@@ -33,6 +33,7 @@ const ANTIGRAVITY_CASE_INSENSITIVE_OVERRIDE_KEYS = [
   'HOME',
   'AGY_CLI_FORCE_FILE_TOKEN_STORAGE',
   'AGY_CLI_DISABLE_AUTO_UPDATE',
+  'AGY_AGENT',
 ] as const;
 
 // Build the env passed to spawn() for a given agent adapter.

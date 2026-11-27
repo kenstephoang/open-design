@@ -13,6 +13,8 @@ import { agentCapabilities } from '../capabilities.js';
 import type { RuntimeAgentDef } from '../types.js';
 
 const ANTIGRAVITY_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
+const ANTIGRAVITY_AGENT_FLAG = '--agent';
+const ANTIGRAVITY_AGENT_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 // Headless runs use agy's documented stdin channel (agy >= 1.1.15):
 //   agy --input-format stream-json --output-format stream-json
@@ -70,30 +72,67 @@ const ANTIGRAVITY_SETTINGS_PATH = join(
   'settings.json',
 );
 
-export function resolveAntigravitySettingsPath(
+function readAntigravityEnvValue(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> | undefined,
+  key: string,
+  caseInsensitive: boolean,
+): string | undefined {
+  if (!env) return undefined;
+  const exact = env[key];
+  if (typeof exact === 'string' && exact.trim()) {
+    return exact.trim();
+  }
+  if (!caseInsensitive) return undefined;
+  const upper = key.toUpperCase();
+  const matchKey = Object.keys(env).find(
+    (candidate) => candidate.toUpperCase() === upper,
+  );
+  const value = matchKey ? env[matchKey] : undefined;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function resolveAntigravityHomeDir(
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
 ): string {
   const isWin32 = process.platform === 'win32';
   const primaryKey = isWin32 ? 'USERPROFILE' : 'HOME';
-  let candidate: string | undefined;
-  if (env) {
-    const exact = env[primaryKey];
-    if (typeof exact === 'string' && exact.trim()) {
-      candidate = exact.trim();
-    } else if (isWin32) {
-      const matchKey = Object.keys(env).find(
-        (key) => key.toUpperCase() === primaryKey,
-      );
-      const value = matchKey ? env[matchKey] : undefined;
-      if (typeof value === 'string' && value.trim()) {
-        candidate = value.trim();
-      }
-    }
-  }
+  const candidate = readAntigravityEnvValue(env, primaryKey, isWin32);
   const pathApi = isWin32 ? win32 : posix;
-  const baseHome =
-    candidate && pathApi.isAbsolute(candidate) ? candidate : homedir();
-  return join(baseHome, '.gemini', 'antigravity-cli', 'settings.json');
+  return candidate && pathApi.isAbsolute(candidate) ? candidate : homedir();
+}
+
+export function isValidAntigravityAgentName(name: string): boolean {
+  return ANTIGRAVITY_AGENT_NAME_RE.test(name);
+}
+
+export function resolveAntigravitySettingsPath(
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
+): string {
+  return join(
+    resolveAntigravityHomeDir(env),
+    '.gemini',
+    'antigravity-cli',
+    'settings.json',
+  );
+}
+
+export function resolveAntigravityAgent(
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
+): string | undefined {
+  const name = readAntigravityEnvValue(
+    env,
+    'AGY_AGENT',
+    process.platform === 'win32',
+  );
+  if (!name || !isValidAntigravityAgentName(name)) return undefined;
+  const agentDefPath = join(
+    resolveAntigravityHomeDir(env),
+    '.gemini',
+    'config',
+    'agents',
+    `${name}.md`,
+  );
+  return existsSync(agentDefPath) ? name : undefined;
 }
 
 export function writeAntigravityModelSelection(
@@ -225,6 +264,7 @@ export const antigravityAgentDef = {
   helpArgs: ['--help'],
   capabilityFlags: {
     [ANTIGRAVITY_SKIP_PERMISSIONS_FLAG]: 'skipPermissions',
+    [ANTIGRAVITY_AGENT_FLAG]: 'agentFlag',
   },
   fallbackModels: [
     DEFAULT_MODEL_OPTION,
@@ -280,8 +320,16 @@ export const antigravityAgentDef = {
       args.push('--log-file', runtimeContext.agentLogFilePath);
     }
     // Daemon-managed headless runs have no interactive approval channel.
-    if (agentCapabilities.get('antigravity')?.skipPermissions) {
+    const capabilities = agentCapabilities.get('antigravity');
+    if (capabilities?.skipPermissions) {
       args.push(ANTIGRAVITY_SKIP_PERMISSIONS_FLAG);
+    }
+    if (
+      runtimeContext.antigravityAgent &&
+      capabilities?.agentFlag &&
+      isValidAntigravityAgentName(runtimeContext.antigravityAgent)
+    ) {
+      args.push(ANTIGRAVITY_AGENT_FLAG, runtimeContext.antigravityAgent);
     }
     args.push(...ANTIGRAVITY_STREAM_JSON_ARGS);
     return args;
